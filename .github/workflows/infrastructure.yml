@@ -226,37 +226,67 @@ jobs:
           name: ssh-key
           path: /tmp/ssh/
 
-      - name: Setup SSH
+      - name: Setup SSH with Fixed Paths
         run: |
-          mkdir -p $HOME/.ssh
-          cp /tmp/ssh/deploy_key $HOME/.ssh/deploy_key
-          chmod 600 $HOME/.ssh/deploy_key
-          ssh-keyscan -H ${{ needs.terraform-apply.outputs.server_ip }} >> $HOME/.ssh/known_hosts
+          # Create SSH directory
+          mkdir -p ~/.ssh
+          
+          # Copy and set permissions on SSH key
+          cp /tmp/ssh/deploy_key ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Verify the key exists and has correct permissions
+          ls -la ~/.ssh/deploy_key
+          
+          # Add host to known_hosts
+          ssh-keyscan -H ${{ needs.terraform-apply.outputs.server_ip }} >> ~/.ssh/known_hosts 2>/dev/null
+          
+          # Create SSH config for this host
+          cat > ~/.ssh/config <<EOF
+          Host todo-server
+              HostName ${{ needs.terraform-apply.outputs.server_ip }}
+              User ubuntu
+              IdentityFile ~/.ssh/deploy_key
+              StrictHostKeyChecking no
+              UserKnownHostsFile /dev/null
+              IdentitiesOnly yes
+          EOF
+          
+          chmod 600 ~/.ssh/config
+          
+          echo "=== SSH Config ==="
+          cat ~/.ssh/config
 
-      - name: Test SSH Connection
-        env:
-          SSH_KEY: $HOME/.ssh/deploy_key
-          SERVER_IP: ${{ needs.terraform-apply.outputs.server_ip }}
+      - name: Test Direct SSH Connection
         run: |
-          echo "Testing SSH connection..."
-          ssh -i $SSH_KEY -o StrictHostKeyChecking=no ubuntu@$SERVER_IP 'echo "✅ SSH connection successful"'
+          echo "Testing direct SSH connection..."
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o IdentitiesOnly=yes ubuntu@${{ needs.terraform-apply.outputs.server_ip }} 'echo "✅ Direct SSH successful"'
 
-      - name: Wait for instance
-        run: sleep 60
+      - name: Test SSH via Config
+        run: |
+          echo "Testing SSH via config..."
+          ssh todo-server 'echo "✅ SSH config successful"'
 
-      - name: Create Ansible inventory
-        env:
-          SERVER_IP: ${{ needs.terraform-apply.outputs.server_ip }}
-          HOME_DIR: ${{ env.HOME }}
+      - name: Wait for Instance Initialization
+        run: |
+          echo "⏳ Waiting 60 seconds for instance to complete initialization..."
+          sleep 60
+
+      - name: Create Ansible Inventory
         run: |
           mkdir -p infra/ansible/inventory
           
+          # Get the actual full path
+          SSH_KEY_PATH=$(readlink -f ~/.ssh/deploy_key)
+          
           cat > infra/ansible/inventory/hosts <<EOF
           [app_servers]
-          ${SERVER_IP} ansible_user=ubuntu ansible_ssh_private_key_file=${HOME_DIR}/.ssh/deploy_key
+          todo-server
 
           [app_servers:vars]
-          ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+          ansible_user=ubuntu
+          ansible_ssh_private_key_file=${SSH_KEY_PATH}
+          ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes'
           domain_name=${{ secrets.DOMAIN_NAME }}
           jwt_secret=${{ secrets.JWT_SECRET }}
           acme_email=${{ secrets.ACME_EMAIL }}
@@ -266,24 +296,40 @@ jobs:
           
           echo "=== Generated Inventory ==="
           cat infra/ansible/inventory/hosts
+          
+          echo ""
+          echo "=== Verifying SSH Key Path ==="
+          echo "SSH_KEY_PATH=${SSH_KEY_PATH}"
+          ls -la ${SSH_KEY_PATH}
 
-      - name: Test Ansible ping
-        working-directory: infra/ansible
-        run: |
-          ansible all -i inventory/hosts -m ping -v
-
-      - name: Deploy with Ansible
+      - name: Test Ansible Connection
         working-directory: infra/ansible
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
         run: |
-          ansible-playbook -i inventory/hosts playbooks/deploy.yml -vv --private-key=$HOME/.ssh/deploy_key
+          echo "Testing Ansible ping..."
+          ansible all -i inventory/hosts -m ping -vvv
 
-      - name: Verify deployment
+      - name: Run Ansible Playbook
+        working-directory: infra/ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_SSH_PIPELINING: "True"
         run: |
-          sleep 60
-          curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }} && echo "✅ App accessible" || echo "⚠️ App not ready"
+          echo "Running Ansible playbook..."
+          ansible-playbook -i inventory/hosts playbooks/deploy.yml -vv
 
+      - name: Verify Deployment
+        run: |
+          echo "⏳ Waiting for application to start..."
+          sleep 60
+          
+          echo "🔍 Testing application..."
+          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }} > /dev/null 2>&1; then
+            echo "✅ Application is accessible at https://${{ secrets.DOMAIN_NAME }}"
+          else
+            echo "⚠️ Application may still be starting. Check manually."
+          fi
   send-success-notification:
     name: Send Success Notification
     needs: [terraform-apply, run-ansible]
