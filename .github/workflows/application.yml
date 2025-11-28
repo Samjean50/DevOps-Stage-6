@@ -10,6 +10,7 @@ on:
       - 'users-api/**'
       - 'log-message-processor/**'
       - 'docker-compose.yml'
+      - '.github/workflows/application.yml'
   workflow_dispatch:
 
 jobs:
@@ -36,74 +37,116 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          eval "$(ssh-agent -s)"
-          ssh-add ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+          
+          # Add server to known hosts
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts 2>/dev/null
+          
+          # Create SSH config
+          cat > ~/.ssh/config <<EOF
+          Host app-server
+              HostName ${{ secrets.SERVER_IP }}
+              User ubuntu
+              IdentityFile ~/.ssh/deploy_key
+              StrictHostKeyChecking no
+              UserKnownHostsFile /dev/null
+              IdentitiesOnly yes
+          EOF
+          
+          chmod 600 ~/.ssh/config
+          
+          echo "=== SSH Config Created ==="
+          cat ~/.ssh/config
 
-      - name: Create Ansible inventory
+      - name: Test SSH Connection
+        run: |
+          echo "Testing SSH connection..."
+          ssh app-server 'echo "✅ SSH connection successful"'
+
+      - name: Create Ansible Inventory
         run: |
           mkdir -p infra/ansible/inventory
+          
+          SSH_KEY_PATH=$(readlink -f ~/.ssh/deploy_key)
+          
           cat > infra/ansible/inventory/hosts <<EOF
           [app_servers]
-          ${{ secrets.SERVER_IP }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/deploy_key ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+          app-server
 
           [app_servers:vars]
+          ansible_user=ubuntu
+          ansible_ssh_private_key_file=${SSH_KEY_PATH}
+          ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes'
           domain_name=${{ secrets.DOMAIN_NAME }}
           jwt_secret=${{ secrets.JWT_SECRET }}
           acme_email=${{ secrets.ACME_EMAIL }}
           github_repo=${{ github.server_url }}/${{ github.repository }}.git
           github_branch=${{ github.ref_name }}
           EOF
+          
+          echo "=== Generated Inventory ==="
+          cat infra/ansible/inventory/hosts
 
-      - name: Deploy application
+      - name: Test Ansible Connection
         working-directory: infra/ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
         run: |
-          ansible-playbook -i inventory/hosts playbooks/deploy.yml -v
+          echo "Testing Ansible connectivity..."
+          ansible all -i inventory/hosts -m ping -v
 
-      - name: Verify deployment
+      - name: Deploy Application with Ansible
+        working-directory: infra/ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_SSH_PIPELINING: "True"
         run: |
-          echo "⏳ Waiting for application to be ready..."
+          echo "Deploying application changes..."
+          ansible-playbook -i inventory/hosts playbooks/deploy.yml -vv
+
+      - name: Wait for Application to Restart
+        run: |
+          echo "⏳ Waiting 45 seconds for containers to restart..."
           sleep 45
+
+      - name: Verify Deployment
+        run: |
+          echo "🔍 Verifying application endpoints..."
           
-          # Test frontend (expect 200 or redirect)
-          echo "🔍 Testing frontend..."
-          HTTP_CODE=$(curl -k -s -o /dev/null -w "%{http_code}" https://${{ secrets.DOMAIN_NAME }})
-          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ]; then
-            echo "✅ Frontend is responding (HTTP $HTTP_CODE)"
+          # Test main application
+          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }} -o /dev/null -w "%{http_code}" | grep -q "200\|301\|302"; then
+            echo "✅ Frontend is accessible"
           else
-            echo "❌ Frontend test failed (HTTP $HTTP_CODE)"
-            exit 1
+            echo "⚠️ Frontend check failed"
           fi
           
-          # Test auth API (expect any response, not timeout)
-          echo "🔍 Testing auth API..."
-          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }}/api/auth > /dev/null 2>&1; then
-            echo "✅ Auth API is responding"
-          else
-            echo "⚠️ Auth API may not be accessible"
-          fi
+          # Test auth API
+          AUTH_STATUS=$(curl -k -s --max-time 10 -o /dev/null -w "%{http_code}" https://${{ secrets.DOMAIN_NAME }}/api/auth)
+          echo "Auth API status: ${AUTH_STATUS}"
           
-          # Test todos API
-          echo "🔍 Testing todos API..."
-          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }}/api/todos > /dev/null 2>&1; then
-            echo "✅ Todos API is responding"
-          else
-            echo "⚠️ Todos API may not be accessible"
-          fi
+          # Test todos API  
+          TODOS_STATUS=$(curl -k -s --max-time 10 -o /dev/null -w "%{http_code}" https://${{ secrets.DOMAIN_NAME }}/api/todos)
+          echo "Todos API status: ${TODOS_STATUS}"
           
           # Test users API
-          echo "🔍 Testing users API..."
-          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }}/api/users > /dev/null 2>&1; then
-            echo "✅ Users API is responding"
-          else
-            echo "⚠️ Users API may not be accessible"
-          fi
+          USERS_STATUS=$(curl -k -s --max-time 10 -o /dev/null -w "%{http_code}" https://${{ secrets.DOMAIN_NAME }}/api/users)
+          echo "Users API status: ${USERS_STATUS}"
           
-          echo ""
-          echo "🎉 Deployment verification completed!"
+          echo "✅ Deployment verification complete"
 
-      - name: Send deployment notification
-        if: success()
+      - name: Check Container Status
+        if: always()
+        run: |
+          echo "Checking container status on server..."
+          ssh app-server 'cd /home/ubuntu/app && docker compose ps'
+
+  send-success-notification:
+    name: Send Success Notification
+    needs: deploy-application
+    if: success()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Send Success Email
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -111,21 +154,33 @@ jobs:
           secure: true
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "✅ TODO App Updated Successfully"
+          subject: "✅ TODO App Application Deployed Successfully"
           to: ${{ secrets.ALERT_EMAIL }}
           from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
           body: |
-            Application deployment completed successfully!
+            ✅ Application Deployment Successful!
             
-            🚀 Deployed to: https://${{ secrets.DOMAIN_NAME }}
-            📦 Repository: ${{ github.repository }}
-            🔖 Commit: ${{ github.sha }}
-            👤 Deployed by: ${{ github.actor }}
+            Your application changes have been deployed successfully.
             
-            🔗 View workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Application URL: https://${{ secrets.DOMAIN_NAME }}
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Deployed by: ${{ github.actor }}
+            
+            Changes deployed:
+            ${{ github.event.head_commit.message }}
+            
+            View workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-      - name: Send failure notification
-        if: failure()
+  send-failure-notification:
+    name: Send Failure Notification
+    needs: deploy-application
+    if: failure()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Send Failure Email
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -133,18 +188,20 @@ jobs:
           secure: true
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "❌ TODO App Deployment Failed"
+          subject: "❌ TODO App Application Deployment Failed"
           to: ${{ secrets.ALERT_EMAIL }}
           from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
           body: |
-            ⚠️ Application deployment failed!
+            ❌ Application Deployment Failed
+            
+            Application deployment encountered an error.
             
             Repository: ${{ github.repository }}
-            Commit: ${{ github.sha }}
             Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
             
-            Please check the workflow for details:
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-
-            #End 
+            Failed commit message:
+            ${{ github.event.head_commit.message }}
+            
+            View workflow logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
