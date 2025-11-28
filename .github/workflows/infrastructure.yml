@@ -45,7 +45,7 @@ jobs:
           project_name         = "todo-app"
           environment          = "production"
           instance_type        = "t3.medium"
-          key_name             = "${{ secrets.AWS_KEY_NAME }}"
+          key_name             = "todo-app-deploy-key"
           ssh_user             = "ubuntu"
           ssh_private_key_path = "~/.ssh/deploy_key"
           domain_name          = "${{ secrets.DOMAIN_NAME }}"
@@ -204,11 +204,93 @@ jobs:
       server_id: ${{ steps.outputs.outputs.server_id }}
     
     steps:
-      - name: Run Ansible Deployment
-        if: success()
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Create terraform.tfvars
+        working-directory: infra/terraform
         run: |
-          echo "Running Ansible Deployment..."
-        
+          cat > terraform.tfvars <<EOF
+          aws_region           = "${{ env.AWS_REGION }}"
+          project_name         = "todo-app"
+          environment          = "production"
+          instance_type        = "t3.medium"
+          key_name             = "todo-app-deploy-key"
+          ssh_user             = "ubuntu"
+          ssh_private_key_path = "~/.ssh/deploy_key"
+          domain_name          = "${{ secrets.DOMAIN_NAME }}"
+          jwt_secret           = "${{ secrets.JWT_SECRET }}"
+          acme_email           = "${{ secrets.ACME_EMAIL }}"
+          github_repo          = "${{ github.server_url }}/${{ github.repository }}.git"
+          github_branch        = "${{ github.ref_name }}"
+          EOF
+
+      - name: Terraform Init
+        working-directory: infra/terraform
+        run: terraform init
+
+      - name: Download Plan (if drift detected)
+        if: needs.terraform-plan.outputs.has_drift == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: infra/terraform
+
+      - name: Terraform Apply
+        working-directory: infra/terraform
+        run: |
+          if [ -f "tfplan" ]; then
+            terraform apply -auto-approve tfplan
+          else
+            terraform apply -auto-approve
+          fi
+
+      - name: Get Outputs and Save SSH Key
+        id: outputs
+        working-directory: infra/terraform
+        run: |
+          echo "server_ip=$(terraform output -raw server_public_ip)" >> $GITHUB_OUTPUT
+          echo "server_id=$(terraform output -raw server_id)" >> $GITHUB_OUTPUT
+          
+          # Save the SSH private key that Terraform generated
+          mkdir -p /tmp/ssh
+          terraform output -raw private_key_pem > /tmp/ssh/deploy_key
+          chmod 600 /tmp/ssh/deploy_key
+
+      - name: Upload SSH Key as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh-key
+          path: /tmp/ssh/deploy_key
+          retention-days: 1
+
+      - name: Display Deployment Info
+        run: |
+          echo "✅ Infrastructure deployed successfully!"
+          echo "Server IP: ${{ steps.outputs.outputs.server_ip }}"
+          echo "Server ID: ${{ steps.outputs.outputs.server_id }}"
+          echo "Application URL: https://${{ secrets.DOMAIN_NAME }}"
+
+  run-ansible:
+    name: Run Ansible Deployment
+    needs: terraform-apply
+    if: success()
+    runs-on: ubuntu-latest
+    
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -222,27 +304,34 @@ jobs:
           pip install ansible
           ansible-galaxy collection install community.docker
 
-      - name: Setup SSH key
+      - name: Download SSH Key
+        uses: actions/download-artifact@v4
+        with:
+          name: ssh-key
+          path: /tmp/ssh/
+
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          cp /tmp/ssh/deploy_key ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           
-          # Start SSH agent and add key
+          # Start SSH agent
           eval "$(ssh-agent -s)"
           ssh-add ~/.ssh/deploy_key
           
           # Add server to known hosts
           ssh-keyscan -H ${{ needs.terraform-apply.outputs.server_ip }} >> ~/.ssh/known_hosts
 
-      - name: Test SSH connection
+      - name: Test SSH Connection
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@${{ needs.terraform-apply.outputs.server_ip }} 'echo "SSH connection successful"'
+          echo "Testing SSH connection..."
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@${{ needs.terraform-apply.outputs.server_ip }} 'echo "✅ SSH connection successful"'
 
-      - name: Wait for instance to be ready
+      - name: Wait for instance to be fully ready
         run: |
-          echo "⏳ Waiting for instance to be fully ready..."
-          sleep 30
+          echo "⏳ Waiting for instance to complete initialization..."
+          sleep 60
 
       - name: Create Ansible inventory
         run: |
@@ -280,118 +369,6 @@ jobs:
 
   send-success-notification:
     name: Send Success Notification
-    needs: [terraform-apply]
+    needs: [terraform-apply, run-ansible]
     if: success()
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Send Success Email
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "✅ TODO App Infrastructure Deployed Successfully"
-          to: ${{ secrets.ALERT_EMAIL }}
-          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
-          html_body: |
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                    .header { background: #28a745; color: white; padding: 20px; text-align: center; }
-                    .content { padding: 20px; background: #f4f4f4; }
-                    .success-box { background: #d4edda; border-left: 4px solid #28a745; padding: 15px; margin: 20px 0; }
-                    .details { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; }
-                    .button { background: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 10px 0; }
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>✅ Deployment Successful</h1>
-                </div>
-                <div class="content">
-                    <div class="success-box">
-                        <strong>🎉 Success:</strong> Your TODO application infrastructure has been deployed successfully!
-                    </div>
-                    
-                    <div class="details">
-                        <h3>📋 Deployment Information</h3>
-                        <ul>
-                            <li><strong>Application URL:</strong> <a href="https://${{ secrets.DOMAIN_NAME }}">https://${{ secrets.DOMAIN_NAME }}</a></li>
-                            <li><strong>Repository:</strong> ${{ github.repository }}</li>
-                            <li><strong>Branch:</strong> ${{ github.ref_name }}</li>
-                            <li><strong>Commit:</strong> ${{ github.sha }}</li>
-                            <li><strong>Deployed by:</strong> ${{ github.actor }}</li>
-                        </ul>
-                    </div>
-
-                    <div style="text-align: center; margin: 30px 0;">
-                        <a href="https://${{ secrets.DOMAIN_NAME }}" class="button">🚀 Visit Application</a>
-                        <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" class="button">📊 View Workflow</a>
-                    </div>
-                </div>
-            </body>
-            </html>
-
-  send-failure-notification:
-    name: Send Failure Notification
-    needs: [terraform-plan, terraform-apply]
-    if: failure()
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Send Failure Email
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "❌ TODO App Infrastructure Deployment Failed"
-          to: ${{ secrets.ALERT_EMAIL }}
-          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
-          html_body: |
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                    .header { background: #dc3545; color: white; padding: 20px; text-align: center; }
-                    .content { padding: 20px; background: #f4f4f4; }
-                    .error-box { background: #f8d7da; border-left: 4px solid #dc3545; padding: 15px; margin: 20px 0; }
-                    .details { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; }
-                    .button { background: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 10px 0; }
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>❌ Deployment Failed</h1>
-                </div>
-                <div class="content">
-                    <div class="error-box">
-                        <strong>⚠️ Error:</strong> Infrastructure deployment encountered an error.
-                    </div>
-                    
-                    <div class="details">
-                        <h3>📋 Failure Details</h3>
-                        <ul>
-                            <li><strong>Repository:</strong> ${{ github.repository }}</li>
-                            <li><strong>Branch:</strong> ${{ github.ref_name }}</li>
-                            <li><strong>Commit:</strong> ${{ github.sha }}</li>
-                            <li><strong>Triggered by:</strong> ${{ github.actor }}</li>
-                        </ul>
-                    </div>
-
-                    <div style="text-align: center; margin: 30px 0;">
-                        <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" class="button">
-                            🔍 View Workflow Logs
-                        </a>
-                    </div>
-                </div>
-            </body>
-            </html>
+    runs-on: ubuntu-late

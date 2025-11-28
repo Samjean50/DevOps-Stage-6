@@ -25,5 +25,11 @@ output "vpc_id" {
 
 output "ssh_command" {
   description = "SSH command to connect to the server"
-  value       = "ssh -i ${var.ssh_private_key_path} ${var.ssh_user}@${aws_instance.app_server.public_ip}"
+  value       = "ssh -i ~/.ssh/deploy_key ubuntu@${aws_instance.app_server.public_ip}"
+}
+
+output "private_key_pem" {
+  description = "Private SSH key (sensitive)"
+  value       = tls_private_key.deployer.private_key_pem
+  sensitive   = true
 }
