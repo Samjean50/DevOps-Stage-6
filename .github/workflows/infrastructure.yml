@@ -204,89 +204,11 @@ jobs:
       server_id: ${{ steps.outputs.outputs.server_id }}
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - name: Setup SSH key
+      - name: Run Ansible Deployment
+        if: success()
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          eval "$(ssh-agent -s)"
-          ssh-add ~/.ssh/deploy_key
-
-      - name: Create terraform.tfvars
-        working-directory: infra/terraform
-        run: |
-          cat > terraform.tfvars <<EOF
-          aws_region           = "${{ env.AWS_REGION }}"
-          project_name         = "todo-app"
-          environment          = "production"
-          instance_type        = "t3.medium"
-          key_name             = "${{ secrets.AWS_KEY_NAME }}"
-          ssh_user             = "ubuntu"
-          ssh_private_key_path = "~/.ssh/deploy_key"
-          domain_name          = "${{ secrets.DOMAIN_NAME }}"
-          jwt_secret           = "${{ secrets.JWT_SECRET }}"
-          acme_email           = "${{ secrets.ACME_EMAIL }}"
-          github_repo          = "${{ github.server_url }}/${{ github.repository }}.git"
-          github_branch        = "${{ github.ref_name }}"
-          EOF
-
-      - name: Terraform Init
-        working-directory: infra/terraform
-        run: terraform init
-
-      - name: Download Plan (if drift detected)
-        if: needs.terraform-plan.outputs.has_drift == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan
-          path: infra/terraform
-
-      - name: Terraform Apply
-        working-directory: infra/terraform
-        run: |
-          if [ -f "tfplan" ]; then
-            terraform apply -auto-approve tfplan
-          else
-            terraform apply -auto-approve
-          fi
-
-      - name: Get Outputs
-        id: outputs
-        working-directory: infra/terraform
-        run: |
-          echo "server_ip=$(terraform output -raw server_public_ip)" >> $GITHUB_OUTPUT
-          echo "server_id=$(terraform output -raw server_id)" >> $GITHUB_OUTPUT
-
-      - name: Display Deployment Info
-        run: |
-          echo "✅ Infrastructure deployed successfully!"
-          echo "Server IP: ${{ steps.outputs.outputs.server_ip }}"
-          echo "Server ID: ${{ steps.outputs.outputs.server_id }}"
-          echo "Application URL: https://${{ secrets.DOMAIN_NAME }}"
-
-  run-ansible:
-    name: Run Ansible Deployment
-    needs: terraform-apply
-    if: success()
-    runs-on: ubuntu-latest
-    
-    steps:
+          echo "Running Ansible Deployment..."
+        
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -300,37 +222,34 @@ jobs:
           pip install ansible
           ansible-galaxy collection install community.docker
 
-      - name: Setup SSH
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          
+          # Start SSH agent and add key
           eval "$(ssh-agent -s)"
           ssh-add ~/.ssh/deploy_key
+          
+          # Add server to known hosts
+          ssh-keyscan -H ${{ needs.terraform-apply.outputs.server_ip }} >> ~/.ssh/known_hosts
 
-      - name: Get server IP from Terraform
-        id: get-ip
+      - name: Test SSH connection
         run: |
-          echo "server_ip=${{ needs.terraform-apply.outputs.server_ip }}" >> $GITHUB_OUTPUT
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@${{ needs.terraform-apply.outputs.server_ip }} 'echo "SSH connection successful"'
 
       - name: Wait for instance to be ready
         run: |
-          echo "⏳ Waiting for SSH to be available..."
-          for i in {1..30}; do
-            if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@${{ steps.get-ip.outputs.server_ip }} 'echo SSH is ready' 2>/dev/null; then
-              echo "✅ SSH connection successful"
-              break
-            fi
-            echo "Attempt $i/30: Waiting..."
-            sleep 10
-          done
+          echo "⏳ Waiting for instance to be fully ready..."
+          sleep 30
 
       - name: Create Ansible inventory
         run: |
           mkdir -p infra/ansible/inventory
           cat > infra/ansible/inventory/hosts <<EOF
           [app_servers]
-          ${{ steps.get-ip.outputs.server_ip }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/deploy_key ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+          ${{ needs.terraform-apply.outputs.server_ip }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/deploy_key ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 
           [app_servers:vars]
           domain_name=${{ secrets.DOMAIN_NAME }}
@@ -342,6 +261,8 @@ jobs:
 
       - name: Deploy application with Ansible
         working-directory: infra/ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
         run: |
           ansible-playbook -i inventory/hosts playbooks/deploy.yml -v
 
@@ -359,7 +280,7 @@ jobs:
 
   send-success-notification:
     name: Send Success Notification
-    needs: [terraform-apply, run-ansible]
+    needs: [terraform-apply]
     if: success()
     runs-on: ubuntu-latest
     
@@ -418,7 +339,7 @@ jobs:
 
   send-failure-notification:
     name: Send Failure Notification
-    needs: [terraform-plan, terraform-apply, run-ansible]
+    needs: [terraform-plan, terraform-apply]
     if: failure()
     runs-on: ubuntu-latest
     
