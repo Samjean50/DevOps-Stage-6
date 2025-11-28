@@ -330,6 +330,7 @@ jobs:
           else
             echo "⚠️ Application may still be starting. Check manually."
           fi
+
   send-success-notification:
     name: Send Success Notification
     needs: [terraform-apply, run-ansible]
