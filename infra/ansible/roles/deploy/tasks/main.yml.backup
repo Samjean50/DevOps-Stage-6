@@ -46,7 +46,7 @@
 
 - block:
     - name: Stop existing containers (if code changed)
-      community.docker.docker_compose_v2:
+      community.docker.docker_compose:
         project_src: /home/{{ ansible_user }}/app
         state: absent
       become_user: "{{ ansible_user }}"
@@ -54,7 +54,7 @@
       ignore_errors: true
 
 - name: Build and start Docker Compose services
-  community.docker.docker_compose_v2:
+  community.docker.docker_compose:
     project_src: /home/{{ ansible_user }}/app
     build: yes
     pull: yes
