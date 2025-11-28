@@ -12,6 +12,7 @@
     force: yes
   when: not git_repo.stat.exists
   become_user: "{{ ansible_user }}"
+  register: git_clone
 
 - name: Pull latest changes from repository
   git:
@@ -22,6 +23,10 @@
   register: git_pull
   become_user: "{{ ansible_user }}"
   when: git_repo.stat.exists
+
+- name: Set fact for code changes
+  set_fact:
+    code_changed: "{{ (git_clone.changed | default(false)) or (git_pull.changed | default(false)) }}"
 
 - name: Create .env file
   template:
@@ -39,13 +44,14 @@
     group: "{{ ansible_user }}"
     mode: '0755'
 
-- name: Stop existing containers (if code changed)
-  community.docker.docker_compose:
-    project_src: /home/{{ ansible_user }}/app
-    state: absent
-  become_user: "{{ ansible_user }}"
-  when: git_pull.changed
-  ignore_errors: yes
+- block:
+    - name: Stop existing containers (if code changed)
+      community.docker.docker_compose:
+        project_src: /home/{{ ansible_user }}/app
+        state: absent
+      become_user: "{{ ansible_user }}"
+      when: code_changed | bool
+      ignore_errors: true
 
 - name: Build and start Docker Compose services
   community.docker.docker_compose:
@@ -80,4 +86,6 @@
   retries: 5
   delay: 10
   until: health_check.status in [200, 301, 302]
-  ignore_errors: yes
+  ignore_errors: true
+
+  

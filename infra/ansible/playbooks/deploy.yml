@@ -1,8 +1,8 @@
 ---
 - name: Deploy TODO Application
   hosts: app_servers
-  become: yes
-  gather_facts: yes
+  become: true
+  gather_facts: true
 
   pre_tasks:
     - name: Wait for system to be ready

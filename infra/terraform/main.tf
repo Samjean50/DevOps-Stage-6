@@ -204,16 +204,24 @@ resource "local_file" "ansible_inventory" {
 }
 
 # Wait for instance to be ready
-resource "null_resource" "wait_for_instance" {
+resource "null_resource" "run_ansible" {
   triggers = {
     instance_id = aws_instance.app_server.id
+    always_run  = timestamp()
   }
 
   provisioner "local-exec" {
-    command = "sleep 90"
+    command = <<-EOT
+      cd ${path.module}/../ansible && \
+      export ANSIBLE_ROLES_PATH=./roles && \
+      ansible-playbook -i inventory/hosts playbooks/deploy.yml
+    EOT
   }
 
-  depends_on = [aws_instance.app_server]
+  depends_on = [
+    local_file.ansible_inventory,
+    null_resource.wait_for_instance
+  ]
 }
 
 # Run Ansible automatically
