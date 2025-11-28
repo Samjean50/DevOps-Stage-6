@@ -22,6 +22,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false
+
+      - name: Get SSH Key from Terraform
+        working-directory: infra/terraform
+        run: |
+          terraform init
+          mkdir -p ~/.ssh
+          terraform output -raw private_key_pem > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Get server IP
+          SERVER_IP=$(terraform output -raw server_public_ip)
+          echo "SERVER_IP=${SERVER_IP}" >> $GITHUB_ENV
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -34,17 +59,13 @@ jobs:
 
       - name: Setup SSH
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          
           # Add server to known hosts
-          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H ${{ env.SERVER_IP }} >> ~/.ssh/known_hosts 2>/dev/null
           
           # Create SSH config
           cat > ~/.ssh/config <<EOF
           Host app-server
-              HostName ${{ secrets.SERVER_IP }}
+              HostName ${{ env.SERVER_IP }}
               User ubuntu
               IdentityFile ~/.ssh/deploy_key
               StrictHostKeyChecking no
@@ -53,14 +74,12 @@ jobs:
           EOF
           
           chmod 600 ~/.ssh/config
-          
-          echo "=== SSH Config Created ==="
-          cat ~/.ssh/config
 
       - name: Test SSH Connection
         run: |
           echo "Testing SSH connection..."
           ssh app-server 'echo "✅ SSH connection successful"'
+
 
       - name: Create Ansible Inventory
         run: |
@@ -139,7 +158,7 @@ jobs:
           echo "Checking container status on server..."
           ssh app-server 'cd /home/ubuntu/app && docker compose ps'
 
-  send-success-notification:
+  send_success_notification:
     name: Send Success Notification
     needs: deploy-application
     if: success()
