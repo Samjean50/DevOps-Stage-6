@@ -83,90 +83,6 @@ jobs:
             echo "✅ No infrastructure drift detected"
           fi
 
-      - name: Format plan output for email
-        if: steps.drift.outputs.has_drift == 'true'
-        id: format_plan
-        working-directory: infra/terraform
-        run: |
-          echo "PLAN_OUTPUT<<EOF" >> $GITHUB_ENV
-          cat plan_output.txt | head -n 200
-          echo "EOF" >> $GITHUB_ENV
-
-      - name: Send Drift Alert Email
-        if: steps.drift.outputs.has_drift == 'true'
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "🚨 Terraform Drift Detected - TODO App Infrastructure"
-          to: ${{ secrets.ALERT_EMAIL }}
-          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
-          html_body: |
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                    .header { background: #ff6b6b; color: white; padding: 20px; text-align: center; }
-                    .content { padding: 20px; background: #f4f4f4; }
-                    .alert-box { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; }
-                    .details { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; }
-                    pre { background: #2d2d2d; color: #f8f8f8; padding: 15px; overflow-x: auto; border-radius: 5px; }
-                    .button { background: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 10px 0; }
-                    .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>🚨 Infrastructure Drift Detected</h1>
-                </div>
-                <div class="content">
-                    <div class="alert-box">
-                        <strong>⚠️ Action Required:</strong> Infrastructure changes have been detected and require your approval before deployment.
-                    </div>
-                    
-                    <div class="details">
-                        <h3>📋 Deployment Details</h3>
-                        <ul>
-                            <li><strong>Repository:</strong> ${{ github.repository }}</li>
-                            <li><strong>Branch:</strong> ${{ github.ref_name }}</li>
-                            <li><strong>Commit:</strong> ${{ github.sha }}</li>
-                            <li><strong>Triggered by:</strong> ${{ github.actor }}</li>
-                            <li><strong>Workflow:</strong> ${{ github.workflow }}</li>
-                        </ul>
-                    </div>
-
-                    <div class="details">
-                        <h3>📊 Terraform Plan Summary</h3>
-                        <pre>${{ env.PLAN_OUTPUT }}</pre>
-                    </div>
-
-                    <div style="text-align: center; margin: 30px 0;">
-                        <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" class="button">
-                            🔍 Review Changes & Approve Deployment
-                        </a>
-                    </div>
-
-                    <div class="alert-box">
-                        <strong>ℹ️ Next Steps:</strong>
-                        <ol>
-                            <li>Review the Terraform plan above</li>
-                            <li>Click the button to go to GitHub Actions</li>
-                            <li>Approve the deployment if changes are expected</li>
-                            <li>The infrastructure will be updated automatically after approval</li>
-                        </ol>
-                    </div>
-                </div>
-                <div class="footer">
-                    <p>This is an automated alert from your DevOps pipeline</p>
-                    <p>Time: ${{ github.event.head_commit.timestamp }}</p>
-                </div>
-            </body>
-            </html>
-
       - name: Upload Plan Artifact
         if: steps.drift.outputs.has_drift == 'true'
         uses: actions/upload-artifact@v4
@@ -335,7 +251,6 @@ jobs:
         run: |
           mkdir -p infra/ansible/inventory
           
-          # Use environment variable expansion
           cat > infra/ansible/inventory/hosts <<EOF
           [app_servers]
           ${SERVER_IP} ansible_user=ubuntu ansible_ssh_private_key_file=${HOME_DIR}/.ssh/deploy_key
@@ -373,4 +288,59 @@ jobs:
     name: Send Success Notification
     needs: [terraform-apply, run-ansible]
     if: success()
-    runs-on: ubuntu-late
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Send Success Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "✅ TODO App Infrastructure Deployed Successfully"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            ✅ Deployment Successful!
+            
+            Your TODO application has been deployed successfully.
+            
+            Application URL: https://${{ secrets.DOMAIN_NAME }}
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Deployed by: ${{ github.actor }}
+            
+            View workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  send-failure-notification:
+    name: Send Failure Notification
+    needs: [terraform-plan, terraform-apply, run-ansible]
+    if: failure()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Send Failure Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "❌ TODO App Infrastructure Deployment Failed"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            ❌ Deployment Failed
+            
+            Infrastructure deployment encountered an error.
+            
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
+            
+            View workflow logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
