@@ -1,0 +1,101 @@
+name: Application Deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'auth-api/**'
+      - 'todos-api/**'
+      - 'users-api/**'
+      - 'log-processor/**'
+      - 'docker-compose.yml'
+      - '.env'
+  workflow_dispatch:
+
+jobs:
+  deploy-application:
+    name: Deploy Application Changes
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Ansible
+        run: |
+          pip install ansible==2.15.0
+          ansible-galaxy collection install community.docker
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
+      - name: Create Ansible inventory
+        run: |
+          mkdir -p infra/ansible/inventory
+          cat > infra/ansible/inventory/hosts <<EOF
+          [app_servers]
+          ${{ secrets.SERVER_IP }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/deploy_key ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+          [app_servers:vars]
+          domain_name=${{ secrets.DOMAIN_NAME }}
+          jwt_secret=${{ secrets.JWT_SECRET }}
+          acme_email=${{ secrets.ACME_EMAIL }}
+          github_repo=${{ github.server_url }}/${{ github.repository }}.git
+          github_branch=${{ github.ref_name }}
+          EOF
+
+      - name: Deploy application
+        working-directory: infra/ansible
+        run: |
+          ansible-playbook -i inventory/hosts playbooks/deploy.yml -v
+
+      - name: Verify deployment
+        run: |
+          echo "Waiting for application to be ready..."
+          sleep 30
+          
+          # Test endpoints
+          echo "Testing frontend..."
+          curl -f -k https://${{ secrets.DOMAIN_NAME }} || echo "Frontend test failed"
+          
+          echo "Testing auth API..."
+          curl -f -k https://${{ secrets.DOMAIN_NAME }}/api/auth || echo "Auth API responding"
+          
+          echo "Testing todos API..."
+          curl -f -k https://${{ secrets.DOMAIN_NAME }}/api/todos || echo "Todos API responding"
+          
+          echo "Testing users API..."
+          curl -f -k https://${{ secrets.DOMAIN_NAME }}/api/users || echo "Users API responding"
+
+      - name: Send deployment notification
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "✅ TODO App Updated Successfully"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            Application deployment completed successfully!
+            
+            Changes deployed to: https://${{ secrets.DOMAIN_NAME }}
+            Repository: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+            
+            View workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
