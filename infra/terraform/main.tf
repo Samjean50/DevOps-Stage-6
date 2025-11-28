@@ -115,11 +115,29 @@ resource "aws_security_group" "app_server" {
     Environment = var.environment
   }
 }
-
-# EC2 Key Pair (use existing)
-data "aws_key_pair" "deployer" {
-  key_name = var.key_name
+# Create SSH Key Pair
+resource "tls_private_key" "deployer" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
 }
+
+resource "aws_key_pair" "deployer" {
+  key_name   = "${var.project_name}-key"
+  public_key = tls_private_key.deployer.public_key_openssh
+
+  tags = {
+    Name        = "${var.project_name}-key"
+    Environment = var.environment
+  }
+}
+
+# Save private key locally
+resource "local_sensitive_file" "private_key" {
+  content         = tls_private_key.deployer.private_key_pem
+  filename        = "${path.module}/../../${var.project_name}-key.pem"
+  file_permission = "0400"
+}
+
 
 # Latest Ubuntu AMI
 data "aws_ami" "ubuntu" {
@@ -141,7 +159,7 @@ data "aws_ami" "ubuntu" {
 resource "aws_instance" "app_server" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
-  key_name               = data.aws_key_pair.deployer.key_name
+  key_name               = aws_key_pair.deployer.key_name
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.app_server.id]
 

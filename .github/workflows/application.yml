@@ -8,9 +8,8 @@ on:
       - 'auth-api/**'
       - 'todos-api/**'
       - 'users-api/**'
-      - 'log-processor/**'
+      - 'log-message-processor/**'
       - 'docker-compose.yml'
-      - '.env'
   workflow_dispatch:
 
 jobs:
@@ -29,7 +28,7 @@ jobs:
 
       - name: Install Ansible
         run: |
-          pip install ansible==2.15.0
+          pip install ansible
           ansible-galaxy collection install community.docker
 
       - name: Setup SSH
@@ -63,21 +62,45 @@ jobs:
 
       - name: Verify deployment
         run: |
-          echo "Waiting for application to be ready..."
-          sleep 30
+          echo "⏳ Waiting for application to be ready..."
+          sleep 45
           
-          # Test endpoints
-          echo "Testing frontend..."
-          curl -f -k https://${{ secrets.DOMAIN_NAME }} || echo "Frontend test failed"
+          # Test frontend (expect 200 or redirect)
+          echo "🔍 Testing frontend..."
+          HTTP_CODE=$(curl -k -s -o /dev/null -w "%{http_code}" https://${{ secrets.DOMAIN_NAME }})
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ]; then
+            echo "✅ Frontend is responding (HTTP $HTTP_CODE)"
+          else
+            echo "❌ Frontend test failed (HTTP $HTTP_CODE)"
+            exit 1
+          fi
           
-          echo "Testing auth API..."
-          curl -f -k https://${{ secrets.DOMAIN_NAME }}/api/auth || echo "Auth API responding"
+          # Test auth API (expect any response, not timeout)
+          echo "🔍 Testing auth API..."
+          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }}/api/auth > /dev/null 2>&1; then
+            echo "✅ Auth API is responding"
+          else
+            echo "⚠️ Auth API may not be accessible"
+          fi
           
-          echo "Testing todos API..."
-          curl -f -k https://${{ secrets.DOMAIN_NAME }}/api/todos || echo "Todos API responding"
+          # Test todos API
+          echo "🔍 Testing todos API..."
+          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }}/api/todos > /dev/null 2>&1; then
+            echo "✅ Todos API is responding"
+          else
+            echo "⚠️ Todos API may not be accessible"
+          fi
           
-          echo "Testing users API..."
-          curl -f -k https://${{ secrets.DOMAIN_NAME }}/api/users || echo "Users API responding"
+          # Test users API
+          echo "🔍 Testing users API..."
+          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }}/api/users > /dev/null 2>&1; then
+            echo "✅ Users API is responding"
+          else
+            echo "⚠️ Users API may not be accessible"
+          fi
+          
+          echo ""
+          echo "🎉 Deployment verification completed!"
 
       - name: Send deployment notification
         if: success()
@@ -94,8 +117,31 @@ jobs:
           body: |
             Application deployment completed successfully!
             
-            Changes deployed to: https://${{ secrets.DOMAIN_NAME }}
+            🚀 Deployed to: https://${{ secrets.DOMAIN_NAME }}
+            📦 Repository: ${{ github.repository }}
+            🔖 Commit: ${{ github.sha }}
+            👤 Deployed by: ${{ github.actor }}
+            
+            🔗 View workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send failure notification
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "❌ TODO App Deployment Failed"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            ⚠️ Application deployment failed!
+            
             Repository: ${{ github.repository }}
             Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
             
-            View workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Please check the workflow for details:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
