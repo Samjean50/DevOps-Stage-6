@@ -58,11 +58,11 @@ services:
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${SERVER_PORT}/users"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${SERVER_PORT}/actuator/health || curl -f http://localhost:${SERVER_PORT}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 90s
+      start_period: 180s
 
   auth-api:
     build: ./auth-api
