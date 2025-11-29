@@ -1,6 +1,7 @@
 services:
+ # ✅ NEW
   traefik:
-    image: traefik:v2.10
+    image: traefik:v3.0
     container_name: traefik
     restart: unless-stopped
     command:
