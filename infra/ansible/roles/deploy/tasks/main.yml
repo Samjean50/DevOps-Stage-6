@@ -19,6 +19,7 @@
     dest: /home/{{ ansible_user }}/app
     version: "{{ github_branch }}"
     update: yes
+    force: yes
   register: git_pull
   become_user: "{{ ansible_user }}"
   when: git_repo.stat.exists
