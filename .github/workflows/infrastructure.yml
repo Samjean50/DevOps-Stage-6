@@ -319,17 +319,21 @@ jobs:
           echo "Running Ansible playbook..."
           ansible-playbook -i inventory/hosts playbooks/deploy.yml -vv
 
-      - name: Verify Deployment
+      - name: Verify deployment
         run: |
-          echo "⏳ Waiting for application to start..."
-          sleep 60
-          
-          echo "🔍 Testing application..."
-          if curl -k -s --max-time 10 https://${{ secrets.DOMAIN_NAME }} > /dev/null 2>&1; then
-            echo "✅ Application is accessible at https://${{ secrets.DOMAIN_NAME }}"
-          else
-            echo "⚠️ Application may still be starting. Check manually."
-          fi
+          echo "⏳ Waiting 45 seconds for containers to restart..."
+          sleep 45
+            
+          echo "🔍 Checking application status..."
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@${{ steps.get-server-ip.outputs.server_ip }} << 'EOF'
+            cd /home/ubuntu/app
+            echo "=== Container Status ==="
+            docker compose ps
+              
+            echo -e "\n=== Testing Application ==="
+            curl -s http://localhost | head -5 || echo "⚠️ Application not responding yet"
+          EOF
+        continue-on-error: true
 
   send-success-notification:
     name: Send Success Notification
