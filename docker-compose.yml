@@ -63,13 +63,22 @@ services:
       - USERS_API_ADDRESS=${USERS_API_ADDRESS}
       - JWT_SECRET=${JWT_SECRET}
     labels:
-      - traefik.enable=true
-      - traefik.http.routers.auth.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/api/auth`)
-      - traefik.http.routers.auth.entrypoints=websecure
-      - traefik.http.routers.auth.tls.certresolver=myresolver
-      - traefik.http.services.auth.loadbalancer.server.port=${AUTH_API_PORT}
-      - traefik.http.middlewares.auth-stripprefix.stripprefix.prefixes=/api/auth
-      - traefik.http.routers.auth.middlewares=auth-stripprefix
+      - "traefik.enable=true"
+      
+      # Original /api/auth route
+      - "traefik.http.routers.auth-api.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/api/auth`)"
+      - "traefik.http.routers.auth-api.entrypoints=websecure"
+      - "traefik.http.routers.auth-api.tls.certresolver=myresolver"
+      - "traefik.http.routers.auth-api.middlewares=auth-stripprefix"
+      - "traefik.http.middlewares.auth-stripprefix.stripprefix.prefixes=/api/auth"
+      
+      # Direct /login, /logout, /signup routes (for frontend)
+      - "traefik.http.routers.auth-direct.rule=Host(`${DOMAIN_NAME}`) && (Path(`/login`) || Path(`/logout`) || Path(`/signup`))"
+      - "traefik.http.routers.auth-direct.entrypoints=websecure"
+      - "traefik.http.routers.auth-direct.tls.certresolver=myresolver"
+      
+      # Service definition (shared by both routers)
+      - "traefik.http.services.auth.loadbalancer.server.port=${AUTH_API_PORT}"
     networks:
       - app-network
     depends_on:
