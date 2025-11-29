@@ -6,6 +6,7 @@ COPY src ./src
 RUN mvn clean install -DskipTests
 
 FROM eclipse-temurin:11-jre-alpine
+RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /app/target/users-api-*.jar app.jar
 EXPOSE 8083
