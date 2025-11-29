@@ -1,7 +1,6 @@
 services:
- # ✅ NEW
-  traefik:
-    image: traefik:v3.0
+traefik:
+    image: traefik:v2.11
     container_name: traefik
     restart: unless-stopped
     environment:
