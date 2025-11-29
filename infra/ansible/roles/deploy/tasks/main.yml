@@ -76,11 +76,11 @@
 
 - name: Verify application is accessible
   uri:
-    url: "http://{{ inventory_hostname }}"
+    url: "http://localhost"  
     status_code: [200, 301, 302]
     validate_certs: no
   register: health_check
   retries: 5
   delay: 10
   until: health_check.status in [200, 301, 302]
-  ignore_errors: yes
+  ignore_errors: yes  
