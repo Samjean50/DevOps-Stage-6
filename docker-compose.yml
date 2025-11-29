@@ -4,7 +4,7 @@ traefik:
     container_name: traefik
     restart: unless-stopped
     environment:
-    - DOCKER_API_VERSION=1.44 
+      - DOCKER_API_VERSION=1.44 
     command:
       - --api.insecure=true
       - --providers.docker=true
