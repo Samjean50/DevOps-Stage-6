@@ -44,22 +44,20 @@
     group: "{{ ansible_user }}"
     mode: '0755'
 
-- block:
-    - name: Stop existing containers (if code changed)
-      community.docker.docker_compose_v2:
-        project_src: /home/{{ ansible_user }}/app
-        state: absent
-      become_user: "{{ ansible_user }}"
-      when: code_changed | bool
-      ignore_errors: true
+- name: Stop existing containers (if code changed)
+  community.docker.docker_compose_v2:
+    project_src: /home/{{ ansible_user }}/app
+    state: absent
+  become_user: "{{ ansible_user }}"
+  when: code_changed | bool
+  ignore_errors: yes
 
 - name: Build and start Docker Compose services
-  community.docker.docker_compose:
+  community.docker.docker_compose_v2:
     project_src: /home/{{ ansible_user }}/app
-    build: yes
-    pull: policy 
+    build: always
+    pull: always
     state: present
-    recreate: smart
   become_user: "{{ ansible_user }}"
   register: docker_output
 
@@ -86,6 +84,4 @@
   retries: 5
   delay: 10
   until: health_check.status in [200, 301, 302]
-  ignore_errors: true
-
-  
+  ignore_errors: yes
