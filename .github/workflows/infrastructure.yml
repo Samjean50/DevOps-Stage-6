@@ -83,7 +83,7 @@ jobs:
 
       - name: Save Terraform Plan
         if: steps.plan.outputs.has_changes == 'true'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: tfplan
           path: infra/terraform/tfplan
@@ -159,7 +159,7 @@ jobs:
         run: terraform init
 
       - name: Download Terraform Plan
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: tfplan
           path: infra/terraform/
@@ -179,7 +179,7 @@ jobs:
           chmod 600 ~/deploy_key.pem
 
       - name: Upload SSH key for Ansible
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ssh-key
           path: ~/deploy_key.pem
@@ -236,7 +236,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -249,7 +249,7 @@ jobs:
 
       - name: Download SSH key
         if: needs.terraform-apply.result == 'success'
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: ssh-key
           path: ~/.ssh/
