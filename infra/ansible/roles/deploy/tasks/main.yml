@@ -50,7 +50,7 @@
     state: absent
   become_user: "{{ ansible_user }}"
   when: code_changed | bool
-  ignore_errors: yes
+  ignore_errors: true
 
 - name: Build and start Docker Compose services
   community.docker.docker_compose_v2:
@@ -84,4 +84,4 @@
   retries: 3
   delay: 10
   failed_when: false 
-  ignore_errors: yes
+  ignore_errors: true
