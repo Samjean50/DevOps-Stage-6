@@ -181,12 +181,6 @@ resource "aws_instance" "app_server" {
               apt-get update
               EOF
 
-  tags = {
-    Name        = "${var.project_name}-server"
-    Environment = var.environment
-    ManagedBy   = "Terraform"
-  }
-
   lifecycle {
     ignore_changes = [user_data]
   }
