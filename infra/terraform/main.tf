@@ -163,11 +163,17 @@ resource "aws_instance" "app_server" {
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.app_server.id]
  
-  tags = {
-    Name        = "${var.project_name}-server"
+  #tags = {
+    #Name        = "${var.project_name}-server"
+    #Environment = var.environment
+    #Project     = var.project_name
+    #ManagedBy   = "Terraform"
+      tags = {
+    Name        = "${var.project_name}-appserver"
     Environment = var.environment
     Project     = var.project_name
     ManagedBy   = "Terraform"
+  }
   }
   root_block_device {
     volume_size           = 30
