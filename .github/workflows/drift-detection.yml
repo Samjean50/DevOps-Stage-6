@@ -1,0 +1,95 @@
+send-drift-notification:
+    name: Send Drift Detection Email
+    needs: terraform-plan
+    if: always() && needs.terraform-plan.result == 'success' && needs.terraform-plan.outputs.has_drift == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download Plan Output
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ./
+        continue-on-error: true
+      
+      - name: Send Drift Detection Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "⚠️ Infrastructure Drift Detected - Manual Approval Required"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            ⚠️ INFRASTRUCTURE DRIFT DETECTED
+            
+            Terraform plan has detected changes to your infrastructure that require attention.
+            Manual approval is required before applying these changes.
+            
+            📊 Deployment Details:
+            • Repository: ${{ github.repository }}
+            • Branch: ${{ github.ref_name }}
+            • Commit: ${{ github.sha }}
+            • Triggered by: ${{ github.actor }}
+            • Commit message: ${{ github.event.head_commit.message }}
+            • Workflow Run ID: ${{ github.run_id }}
+            
+            📋 Next Steps:
+            1. Review the attached Terraform plan output
+            2. Navigate to the workflow link below
+            3. Approve or reject the deployment in the "production" environment
+            
+            🔗 Review and Approve:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ⏳ The workflow is paused and waiting for your approval.
+            
+            ---
+            Workflow triggered: ${{ github.event_name }}
+            This is an automated alert from your DevOps CI/CD pipeline.
+          attachments: plan_output.txt
+
+  send-no-drift-notification:
+    name: Send No Drift Notification
+    needs: terraform-plan
+    if: always() && needs.terraform-plan.result == 'success' && needs.terraform-plan.outputs.has_drift == 'false'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Send No Drift Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "✅ No Infrastructure Drift Detected"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: DevOps Alerts <${{ secrets.EMAIL_USERNAME }}>
+          body: |
+            ✅ NO INFRASTRUCTURE DRIFT DETECTED
+            
+            Terraform plan completed successfully. Your infrastructure is in sync with the desired state.
+            
+            📊 Details:
+            • Repository: ${{ github.repository }}
+            • Branch: ${{ github.ref_name }}
+            • Commit: ${{ github.sha }}
+            • Triggered by: ${{ github.actor }}
+            • Workflow trigger: ${{ github.event_name }}
+            • Workflow Run ID: ${{ github.run_id }}
+            
+            ℹ️ No changes are required. Infrastructure is already up to date.
+            
+            🔗 View Workflow:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ---
+            This is an automated notification from your DevOps CI/CD pipeline.
