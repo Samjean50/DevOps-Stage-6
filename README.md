@@ -21,5 +21,4 @@ Note: 3 different login details are provided in the .env file
 ## License
 
 MIT
-# Baseline deployment - Mon Dec  8 16:37:52 GMT 2025
 #Testing drift detection - Mon Dec  8 16:46:58 GMT 2025
