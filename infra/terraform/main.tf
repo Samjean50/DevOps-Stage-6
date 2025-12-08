@@ -203,3 +203,5 @@ resource "local_file" "ansible_inventory" {
 
   depends_on = [aws_instance.app_server]
 }
+
+#Addde changes
