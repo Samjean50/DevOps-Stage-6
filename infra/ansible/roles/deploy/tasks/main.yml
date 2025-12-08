@@ -47,19 +47,18 @@
 - name: Stop existing containers (if code changed)
   community.docker.docker_compose_v2:
     project_src: /home/{{ ansible_user }}/app
-    state: absent
-  become_user: "{{ ansible_user }}"
-  when: code_changed | bool
+    state: stopped
+  become: true
+  when: git_pull.changed
   ignore_errors: true
 
 - name: Build and start Docker Compose services
   community.docker.docker_compose_v2:
     project_src: /home/{{ ansible_user }}/app
     build: always
-    pull: always
     state: present
-  become_user: "{{ ansible_user }}"
-  register: docker_output
+  become: true
+  register: compose_result
 
 - name: Wait for services to be healthy
   pause:
@@ -78,7 +77,7 @@
 - name: Verify application is accessible
   uri:
     url: "http://localhost"
-    status_code: [200, 301, 302, 404]  # Accept 404 for now
+    status_code: [200, 301, 302, 404] 
     validate_certs: no
   register: health_check
   retries: 3
